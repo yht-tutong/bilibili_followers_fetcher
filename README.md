@@ -7,6 +7,12 @@
 
 获取B站UP主的粉丝列表，并导出为HTML或JSON格式。
 
+## 作者信息
+
+- **B站主页**：[https://space.bilibili.com/630095673](https://space.bilibili.com/630095673)
+- **GitHub项目主页**：[https://github.com/yht-tutong/bilibili_followers_fetcher](https://github.com/yht-tutong/bilibili_followers_fetcher)
+- **QQ交流群**：[点击链接加入群聊【我是交流群喵】](https://qm.qq.com/q/ZyivYoMzmy)
+
 ## 功能特性
 
 - 获取粉丝基本信息（UID、用户名、头像）
@@ -136,6 +142,12 @@ HTML页面以表格形式展示粉丝列表，包含以下列：
 
 - Python 3.7+
 - aiohttp
+
+## 下载可执行文件
+
+如果不想自己编译，可以直接下载预编译的可执行文件：
+
+前往 [Releases](https://github.com/yht-tutong/bilibili_followers_fetcher/releases/tag/v0.0.1) 页面下载最新版本的 `bilibili_followers_fetcher`。
 
 ## 打包成可执行文件
 

@@ -1,6 +1,7 @@
 import asyncio
 import aiohttp
 import json
+import sys
 import html
 import re
 from typing import List, Dict, Any
@@ -451,10 +452,10 @@ if __name__ == "__main__":
                 sort_by_time=not args.no_sort,
             )
         )
-        exit(exit_code)
+        sys.exit(exit_code)
     except KeyboardInterrupt:
         print("\n程序被用户中断")
-        exit(1)
+        sys.exit(1)
     except Exception as error:
         print(f"程序运行出错: {str(error)}")
-        exit(1)
+        sys.exit(1)
