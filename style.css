@@ -1,0 +1,148 @@
+* {
+  font-family: Lato, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-size: 14px;
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  background: #f5f7fa;
+  padding: 20px;
+  line-height: 1.6;
+  min-height: 100vh;
+}
+
+.container {
+  width: 100%;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.header {
+  text-align: center;
+  margin-bottom: 30px;
+}
+
+.header h1 {
+  font-size: 32px;
+  font-weight: 600;
+  color: #1f2937;
+  margin-bottom: 8px;
+}
+
+.header p {
+  font-size: 16px;
+  color: #6b7280;
+}
+
+.meta {
+  margin-top: 12px;
+  padding: 12px 20px;
+  background: #f0f7ff;
+  border-radius: 8px;
+  display: inline-block;
+  text-align: left;
+}
+
+.meta p {
+  font-size: 14px;
+  color: #374151;
+  margin: 4px 0;
+}
+
+.meta .label {
+  color: #6b7280;
+  font-weight: 500;
+}
+
+.followers-content {
+  background: white;
+  border-radius: 12px;
+  padding: 20px;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th, td {
+  padding: 12px 16px;
+  text-align: left;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+th {
+  background: #f9fafb;
+  font-weight: 600;
+  color: #374151;
+  position: sticky;
+  top: 0;
+}
+
+tr:hover {
+  background: #f9fafb;
+}
+
+img.face {
+  border-radius: 50%;
+  height: 40px;
+  width: 40px;
+  object-fit: cover;
+}
+
+a {
+  color: #00a1d6;
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+@media (max-width: 768px) {
+  body {
+    padding: 10px;
+  }
+
+  .header h1 {
+    font-size: 24px;
+  }
+
+  .followers-content {
+    padding: 15px;
+  }
+
+  th, td {
+    padding: 8px 12px;
+    font-size: 13px;
+  }
+
+  img.face {
+    height: 32px;
+    width: 32px;
+  }
+}
+
+@media (max-width: 480px) {
+  body {
+    padding: 5px;
+  }
+
+  .followers-content {
+    padding: 10px;
+  }
+
+  th, td {
+    padding: 6px 8px;
+    font-size: 12px;
+  }
+
+  img.face {
+    height: 28px;
+    width: 28px;
+  }
+}

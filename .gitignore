@@ -214,5 +214,12 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
+# Output files
+bilibili_followers.json
+bilibili_followers.html
+
+# User config
+config.json
+
 # Streamlit
 .streamlit/secrets.toml
