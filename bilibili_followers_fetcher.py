@@ -4,12 +4,17 @@ import json
 import sys
 import html
 import re
-from typing import List, Dict, Any
+import hashlib
+import time
+import urllib.parse
+import random
+import math
+from typing import List, Dict, Any, Optional
 from datetime import datetime
 
 
 class BilibiliFetcher:
-    def __init__(self):
+    def __init__(self, delay_max: float = 1.0, max_concurrent: int = 3):
         self.headers = {
             "Origin": "https://www.bilibili.com",
             "Referer": "https://www.bilibili.com/",
@@ -19,6 +24,12 @@ class BilibiliFetcher:
         self.uid = None
         self.uname = None
         self.output_time = None
+        # 请求间随机延迟范围（秒），防触发风控
+        self.delay_min = 0.1
+        self.delay_max = delay_max
+        # 最大并发请求数
+        self.max_concurrent = max_concurrent
+        self.total_count = 0
 
     def load_config(self, config_file: str = "config.json") -> bool:
         """从配置文件加载SESSDATA"""
@@ -37,6 +48,60 @@ class BilibiliFetcher:
         except json.JSONDecodeError:
             print(f"配置文件 {config_file} 格式错误")
             return False
+
+    @staticmethod
+    def _get_mix_key(img_key: str, sub_key: str) -> str:
+        """混合WBI密钥"""
+        return sub_key[:4] + img_key[:4] + sub_key[4:] + img_key[4:]
+
+    @staticmethod
+    def _sign_params(params: Dict[str, str], mix_key: str) -> Dict[str, str]:
+        """对请求参数进行WBI签名，返回带 w_rid 和 wts 的参数"""
+        sorted_params = dict(sorted(params.items(), key=lambda x: x[0]))
+        query = urllib.parse.urlencode(sorted_params)
+        w_rid = hashlib.md5((query + mix_key).encode()).hexdigest()
+        params["w_rid"] = w_rid
+        params["wts"] = str(int(time.time()))
+        return params
+
+    async def _fetch_wbi_keys(self):
+        """获取WBI签名所需的 img_key 和 sub_key"""
+        try:
+            async with self.session.get(
+                "https://api.bilibili.com/x/web-interface/nav"
+            ) as response:
+                ujson = await response.json()
+
+            if ujson["code"] != 0:
+                raise Exception(f'获取WBI密钥失败: {ujson["message"]}')
+
+            wbi_img = ujson["data"]["wbi_img"]
+            img_key = wbi_img["img_url"].split("/")[-1].split(".")[0]
+            sub_key = wbi_img["sub_url"].split("/")[-1].split(".")[0]
+            return img_key, sub_key
+
+        except Exception as e:
+            raise Exception(f"获取WBI密钥时出错: {str(e)}")
+
+    # --- 并发控制与进度条 ---
+
+    @staticmethod
+    def _progress_bar(current: int, total: int, prefix: str = "") -> None:
+        """显示进度条"""
+        if total <= 0:
+            return
+        bar_len = 30
+        filled = int(bar_len * current / total)
+        bar = "█" * filled + "░" * (bar_len - filled)
+        pct = int(100 * current / total)
+        sys.stdout.write(f"\r{prefix}: [{bar}] {current}/{total} ({pct}%)")
+        sys.stdout.flush()
+        if current >= total:
+            sys.stdout.write("\n")
+
+    async def _rate_limit_delay(self) -> None:
+        """请求间随机延迟，避免触发B站风控"""
+        await asyncio.sleep(random.uniform(self.delay_min, self.delay_max))
 
     def encode_html(self, text: str) -> str:
         """HTML编码函数，与JavaScript版本保持一致"""
@@ -76,6 +141,51 @@ class BilibiliFetcher:
         if self.session:
             await self.session.close()
 
+    async def get_user_info_by_uid(self, uid: int) -> str:
+        """根据指定UID获取用户名称（多策略尝试，失败则使用占位）"""
+        self.uid = uid
+        self.uname = f"UID: {uid}"
+
+        # 策略1：使用WBI签名的空间信息API
+        try:
+            img_key, sub_key = await self._fetch_wbi_keys()
+            mix_key = self._get_mix_key(img_key, sub_key)
+            params = self._sign_params({"mid": str(uid)}, mix_key)
+
+            url = (
+                f"https://api.bilibili.com/x/space/wbi/acc/info"
+                f"?mid={uid}&w_rid={params['w_rid']}&wts={params['wts']}"
+            )
+            async with self.session.get(url) as response:
+                ujson = await response.json()
+
+            if ujson["code"] == 0 and ujson.get("data", {}).get("name"):
+                self.uname = ujson["data"]["name"]
+                print(f"成功获取用户名: {self.uname}")
+                return self.uname
+
+            print(f'WBI空间API返回: {ujson.get("message", "未知错误")}')
+        except Exception as e:
+            print(f"WBI空间API失败: {str(e)}")
+
+        # 策略2：尝试 /x/web-interface/card 接口
+        try:
+            url = f"https://api.bilibili.com/x/web-interface/card?mid={uid}"
+            async with self.session.get(url) as response:
+                ujson = await response.json()
+
+            if ujson["code"] == 0 and ujson.get("data", {}).get("card", {}).get("name"):
+                self.uname = ujson["data"]["card"]["name"]
+                print(f"成功获取用户名: {self.uname}")
+                return self.uname
+
+            print(f'Card API返回: {ujson.get("message", "未知错误")}')
+        except Exception as e:
+            print(f"Card API失败: {str(e)}")
+
+        print(f"无法获取用户名称，将使用占位: {self.uname}")
+        return self.uname
+
     async def get_user_info(self) -> int:
         """获取自己的UID和用户名"""
         try:
@@ -96,6 +206,24 @@ class BilibiliFetcher:
             print(f"获取用户信息时出错: {str(e)}")
             raise
 
+    async def get_follower_count(self) -> int:
+        """获取当前用户的粉丝总数"""
+        try:
+            url = f"https://api.bilibili.com/x/relation/stat?vmid={self.uid}"
+            async with self.session.get(url) as response:
+                data = await response.json()
+
+            if data["code"] == 0 and data.get("data"):
+                total = data["data"].get("follower", 0)
+                print(f"粉丝总数: {total}")
+                return total
+            else:
+                print(f"获取粉丝总数失败: {data.get('message', '未知错误')}")
+                return 0
+        except Exception as e:
+            print(f"获取粉丝总数时出错: {str(e)}")
+            return 0
+
     async def get_followers_page(self, page: int) -> List[Dict[str, Any]]:
         """获取指定页的粉丝信息"""
         try:
@@ -106,24 +234,58 @@ class BilibiliFetcher:
             if data["code"] == 0 and data.get("data") and data["data"].get("list"):
                 return data["data"]["list"]
             else:
-                print(f'获取第{page}页粉丝信息失败: {data.get("message", "未知错误")}')
+                # 当返回码为0但list为空时，说明该页无数据（正常结束信号）
+                if data.get("code") == 0:
+                    return []
+                msg = data.get("message", "未知错误")
+                print(f"\n获取第{page}页粉丝信息失败: {msg}")
                 return []
 
         except Exception as e:
-            print(f"请求第{page}页时出错: {str(e)}")
+            print(f"\n请求第{page}页时出错: {str(e)}")
             return []
 
-    async def get_all_followers(self, max_pages: int = 20) -> List[Dict[str, Any]]:
-        """获取所有粉丝信息"""
-        followers = []
+    async def get_all_followers(self, max_pages: int = 200) -> List[Dict[str, Any]]:
+        """先查粉丝总数，再按实际页数并发获取"""
+        # 先获取粉丝总数
+        total_count = await self.get_follower_count()
+        if total_count == 0:
+            print("粉丝总数为0，无需获取")
+            return []
+        self.total_count = total_count
 
-        # 获取前20页粉丝的信息，每页50个
-        for i in range(1, max_pages + 1):
-            page_followers = await self.get_followers_page(i)
+        # 计算实际需要获取的页数
+        actual_pages = math.ceil(total_count / 50)
+        actual_pages = min(actual_pages, max_pages)  # 安全上限
+        print(f"共 {actual_pages} 页（每页50人），{self.max_concurrent}并发获取...\n")
+
+        followers = []
+        semaphore = asyncio.Semaphore(self.max_concurrent)
+
+        async def fetch_page(page: int) -> List[Dict[str, Any]]:
+            """带信号量控制和限速的单页获取"""
+            async with semaphore:
+                page_followers = await self.get_followers_page(page)
+                await self._rate_limit_delay()
+                return page_followers
+
+        # 创建所有页面的并发任务
+        tasks = [asyncio.create_task(fetch_page(i)) for i in range(1, actual_pages + 1)]
+
+        # 按顺序处理结果
+        for i, task in enumerate(tasks, 1):
+            page_followers = await task
             if not page_followers:
+                for remaining in tasks[i:]:
+                    remaining.cancel()
+                self._progress_bar(i - 1, i - 1, "获取粉丝列表")
                 break
             followers.extend(page_followers)
+            self._progress_bar(i, actual_pages, "获取粉丝列表")
+        else:
+            self._progress_bar(actual_pages, actual_pages, "获取粉丝列表")
 
+        print(f"共获得 {len(followers)} 位粉丝")
         return followers
 
     async def get_followers_detail_info(self, followers: List[Dict[str, Any]]) -> None:
@@ -152,33 +314,48 @@ class BilibiliFetcher:
             print(f"获取粉丝详细信息时出错: {str(e)}")
 
     async def get_followers_stats(self, followers: List[Dict[str, Any]]) -> None:
-        """获取所有粉丝的粉丝数统计"""
+        """并发获取所有粉丝的粉丝数统计，信号量控制并发数"""
         if not followers:
             return
 
-        # 分批处理，每批最多20个
-        followers_without_stat = [f["mid"] for f in followers]
+        mids = [f["mid"] for f in followers]
+        # 分批，每批最多20个
+        batches = [mids[i:i + 20] for i in range(0, len(mids), 20)]
+        total_batches = len(batches)
+        semaphore = asyncio.Semaphore(self.max_concurrent)
+        completed = 0
 
-        while followers_without_stat:
-            batch = followers_without_stat[:20]
-            followers_without_stat = followers_without_stat[20:]
+        print(f"\n正在获取粉丝统计信息（共{total_batches}批，最多{self.max_concurrent}并发）...")
 
-            try:
-                mids_str = ",".join(map(str, batch))
-                url = f"https://api.bilibili.com/x/relation/stats?mids={mids_str}"
-                async with self.session.get(url) as response:
-                    sjson = await response.json()
+        async def fetch_batch(batch: List[int]) -> None:
+            """获取一批粉丝的统计"""
+            nonlocal completed
+            async with semaphore:
+                try:
+                    mids_str = ",".join(map(str, batch))
+                    url = f"https://api.bilibili.com/x/relation/stats?mids={mids_str}"
+                    async with self.session.get(url) as response:
+                        sjson = await response.json()
 
-                if sjson["code"] == 0 and sjson.get("data"):
-                    # 将统计信息合并到粉丝对象中
-                    for mid_str, stat in sjson["data"].items():
-                        mid = int(mid_str)
-                        follower = next((f for f in followers if f["mid"] == mid), None)
-                        if follower:
-                            follower.update(stat)
+                    if sjson["code"] == 0 and sjson.get("data"):
+                        for mid_str, stat in sjson["data"].items():
+                            mid = int(mid_str)
+                            follower = next(
+                                (f for f in followers if f["mid"] == mid), None
+                            )
+                            if follower:
+                                follower.update(stat)
 
-            except Exception as e:
-                print(f"获取粉丝统计信息时出错: {str(e)}")
+                except Exception as e:
+                    print(f"\n获取粉丝统计信息时出错: {str(e)}")
+                finally:
+                    completed += 1
+                    self._progress_bar(completed, total_batches, "获取粉丝统计")
+                    # 每个请求后限流延迟
+                    await self._rate_limit_delay()
+
+        tasks = [asyncio.create_task(fetch_batch(batch)) for batch in batches]
+        await asyncio.gather(*tasks)
 
     def filter_followers(
         self,
@@ -358,9 +535,12 @@ async def main(
     filter_default_avatar: bool = True,
     filter_bili_prefix: bool = True,
     sort_by_time: bool = True,
+    uid: int = None,
+    delay_max: float = 1.0,
+    max_concurrent: int = 3,
 ):
     """主函数"""
-    fetcher = BilibiliFetcher()
+    fetcher = BilibiliFetcher(delay_max=delay_max, max_concurrent=max_concurrent)
 
     try:
         # 加载配置
@@ -371,11 +551,17 @@ async def main(
         # 创建会话
         await fetcher.create_session()
 
-        # 获取用户UID
-        await fetcher.get_user_info()
+        # 获取用户信息
+        if uid:
+            # 使用指定的UID
+            await fetcher.get_user_info_by_uid(uid)
+            print(f"正在查询用户 {fetcher.uname} (UID: {uid}) 的粉丝列表")
+        else:
+            # 获取当前登录用户的UID
+            await fetcher.get_user_info()
 
-        # 获取所有粉丝信息
-        followers = await fetcher.get_all_followers(max_pages=20)
+        # 获取所有粉丝信息（内部会先查总数再按实际页数获取）
+        followers = await fetcher.get_all_followers()
 
         # 获取所有粉丝的详细信息
         await fetcher.get_followers_detail_info(followers)
@@ -388,7 +574,7 @@ async def main(
             followers, filter_default_avatar, filter_bili_prefix
         )
 
-        total_count = len(followers)
+        total_count = fetcher.total_count
 
         # 根据选择导出文件
         if export_format in ("json", "both"):
@@ -437,11 +623,39 @@ if __name__ == "__main__":
         action="store_true",
         help="不按关注时间排序（默认按关注时间从新到旧排序）",
     )
+    parser.add_argument(
+        "--uid",
+        type=int,
+        default=None,
+        help="指定要查询的B站用户UID（默认查询自己的粉丝）",
+    )
+    parser.add_argument(
+        "--delay",
+        type=float,
+        default=1.0,
+        help="请求间最大延迟秒数，最小固定0.1秒，范围 0.1~3.0（默认: 1.0）",
+    )
+    parser.add_argument(
+        "--concurrent",
+        type=int,
+        default=3,
+        help="粉丝统计阶段最大并发请求数，范围 1~10（默认: 3）",
+    )
     args = parser.parse_args()
 
     # 解析过滤选项
     filter_default_avatar = args.filter in ("avatar", "both")
     filter_bili_prefix = args.filter in ("bili", "both")
+
+    # 校验 delay 参数
+    delay = max(0.1, min(3.0, args.delay))
+    if delay != args.delay:
+        print(f"提示: delay 值已自动限制在 0.1~3.0 范围内（当前: {delay}）")
+
+    # 校验 concurrent 参数
+    concurrent = max(1, min(10, args.concurrent))
+    if concurrent != args.concurrent:
+        print(f"提示: concurrent 值已自动限制在 1~10 范围内（当前: {concurrent}）")
 
     try:
         exit_code = asyncio.run(
@@ -450,6 +664,9 @@ if __name__ == "__main__":
                 filter_default_avatar=filter_default_avatar,
                 filter_bili_prefix=filter_bili_prefix,
                 sort_by_time=not args.no_sort,
+                uid=args.uid,
+                delay_max=delay,
+                max_concurrent=concurrent,
             )
         )
         sys.exit(exit_code)
