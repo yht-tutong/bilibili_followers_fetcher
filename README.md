@@ -1,0 +1,2 @@
+# bilibili_followers_fetcher
+获取B站UP主的粉丝列表，并导出为HTML或JSON格式。
